@@ -1,8 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
 set InputFiles="C:\Users\wfb6\Desktop\Evernotes\*.html"
-set OutImages="C:\Users\wfb6\Desktop\Markdowns\Images\"
-set tmpFile="C:\Users\wfb6\Desktop\Markdowns\tmp.md"
 
 for %%i in (%InputFiles%) do (
     set infile=%%i
@@ -13,9 +11,9 @@ for %%i in (%InputFiles%) do (
 	set outfile=!outfile:Evernotes=Markdowns!
 	set outfile=!outfile: =-!
 	set outfile=!outfile:,=!
-    	echo(!outfile!
-    	echo(!images!
-	xcopy /s /Y "!images!" "!OutImages!"
+	set outimages=!outfile:.md=_files!
+	if not exist "!outimages!" mkdir !outimages!
+	xcopy /s "!images!" "!outimages!"
 	pandoc "!infile!" -s -o "!outfile!"
 	python str_replace.py "!outfile!"
     	echo(

@@ -19,6 +19,7 @@ def strip_tags(html):
 def main(file_name):
     import os
     import re
+    image_path = file_name.split('\\')[-1].split('.')[0]+'_files'
     f = open(file_name)
     text = f.read()
     f.close()
@@ -35,7 +36,7 @@ def main(file_name):
     while text!=oldtext:
         oldtext=text
         text = re.sub('\n\n\n','\n',text)
-    text = re.sub('\!\[\]\((.*)\/','![](./Images/',text)
+    text = re.sub('\!\[\]\((.*)\/','![](./'+image_path+'/',text)
     text = text.replace('\\',' ')
     text = re.sub('\n(?=.)',' ',text)
     text = re.sub('[ .](?=\!\[)','\n',text)
