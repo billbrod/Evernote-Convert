@@ -3,15 +3,25 @@
 #Inspired by: https://gist.github.com/sebastien/dc18ee5c5a73cac539bb#file-enextractor-py
 # and https://github.com/asoplata/evernote-to-markdown/blob/master/convert.py
 
-import os,re,base64,mimetypes,sys,dateutil.parser,datetime
+import os,re,base64,mimetypes,sys,dateutil.parser,datetime,hashlib,glob,getpass
 from xml.etree import ElementTree as ET
 from html2text import html2text
 
-def main(path):
-    tree = ET.parse(path)
-    attach_count = 0
-    for note in tree.iter('note'):
-        attach_count = write_note(process_note(note),attach_count,os.path.splitext(path)[0]+'.org')
+def main(glob_path="~/Dropbox/Docs/Evernote.Export/*.enex"):
+    glob_path = os.path.expanduser(glob_path)
+    credentials = {}
+    credentials['username'] = raw_input("Input username: ")
+    credentials['password'] = getpass.getpass("Input password: ")
+    #We want to assign a unique id to each note, so we can link them
+    note_dict = dict((note.find('title').text,hashlib.md5(note.find('title').text).hexdigest()) for path in glob.glob(glob_path) for note in ET.parse(path).iter('note'))
+    for path in glob.glob(glob_path):
+        if path!='/home/billbrod/Dropbox/Docs/Evernote.Export/test.enex':
+            continue
+        print("Parsing %s"%path)
+        tree = ET.parse(path)
+        attach_count = 0
+        for note in tree.iter('note'):
+            attach_count = write_note(process_note(note),attach_count,note_dict,credentials,os.path.splitext(path)[0]+'.org')
 
 def process_note(note):
     title = note.find("title").text if note.find('title') is not None else None
@@ -51,7 +61,7 @@ def process_note(note):
             resources  = rsrc,
     )
 
-def write_note(note,attach_count,path="notes"):
+def write_note(note,attach_count,note_dict,credentials,path="notes"):
     """Now need to decide how to format my Evernote text into something org-modey.
     
     TODO:
@@ -69,12 +79,19 @@ def write_note(note,attach_count,path="notes"):
     I can organize them while exporting and then organize again when re-filing)
     - Add header for org file (startup options mainly)
     
-    Write now, tables are the biggest issue. Also, not all \n are being removed from the middle of paragraphs, so check why that is
+    Right now, tables are the biggest issue. Also, not all \n are
+    being removed from the middle of paragraphs, so check why that is
+    -- fixed the \n's, but I think tables may be too difficult. Since
+    they're infrequent, probably best to go through and fix them by
+    hand, they're not too far off..
+
     """
     with open(path,'a') as f:
+        print("Writing headline %s in note %s"%(note['title'],path))
         f.write("* %s\n"%note['title'])
-        f.write("  %s\n\n"%note['created'])
-        f.write("%s"%format_content(note['content']))
+        f.write("  %s\n"%note['created'])
+        f.write("  :PROPERTIES:\n  :ID: %s\n  :END:\n\n"%note_dict[note['title']])
+        f.write("%s"%format_content(note['content'],note_dict,credentials))
         if note['resources']:
             attach_path = os.path.dirname(path)+'/attachments/%s-%s%s'%(os.path.basename(path.split('.')[0]),'%s','%s')
             if not os.path.isdir(os.path.dirname(attach_path)):
@@ -88,18 +105,47 @@ def write_note(note,attach_count,path="notes"):
         
     return attach_count
 
-def format_content(content):
+def format_content(content,note_dict,credentials):
     #Get rid of any mid-line newlines
     content = re.subn(r"([^\n\r])[\n\r]([^\n\r])",r"\1\2",content,re.M)[0]
+    content = re.subn(r"(.)[\n\r](.)",r"\1\2",content)[0]
     #Change link formatting to org mode
-    content = re.subn(r"\[(.*?)\]\((.*?)\)",r'[[\1][\2]]',content)[0]
+    content = re.subn(r"\[(.*?)\]\((.*?)\)",r'[[\2][\1]]',content)[0]
     #Combine paragraphs
     def upper_func(match):
         return ". %s"%match.group(1).upper()
     content = re.subn(r"\n\n  *([^\n\r])",upper_func,content)[0]
     #Indent new lines
     content = re.subn(r"(^|\n)",r"\1  ",content)[0]
+    #If we have links to other notes, they will be linked via a unique id.
+    #First we find all urls that have evernote in them
+    for url in re.findall("(?P<url>https?://www.evernote[^\s\]]+)", content):
+        #Then we use evernote_get_title to find the title of the note and find its unique id in note_dict
+        content = re.subn(url,"id:%s"%note_dict[evernote_get_title(url,credentials)],content)[0]
     return content
+
+def evernote_get_title(url,credentials):
+    import mechanize,cookielib
+    browser = mechanize.Browser()
+    # Cookie Jar
+    cj = cookielib.LWPCookieJar()
+    browser.set_cookiejar(cj)
+    # Browser options
+    browser.set_handle_equiv(True)
+    browser.set_handle_gzip(True)
+    browser.set_handle_redirect(True)
+    browser.set_handle_referer(True)
+    browser.set_handle_robots(False)
+    # Follows refresh 0 but not hangs on refresh > 0
+    browser.set_handle_refresh(mechanize._http.HTTPRefreshProcessor(), max_time=1)
+    browser.open(url)
+    browser.select_form(nr = 0)
+    browser.form['username'] = credentials["username"]
+    browser.form['password'] = credentials["password"]
+    browser.submit()
+    title = browser.title()
+    browser.close()
+    return title
 
 if __name__ == "__main__":
     main(*sys.argv[1:])
