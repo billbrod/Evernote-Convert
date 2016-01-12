@@ -1,0 +1,4 @@
+dateutil
+html2text
+unidecode
+mechanize

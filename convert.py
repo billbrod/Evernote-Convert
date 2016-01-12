@@ -6,8 +6,9 @@
 import os,re,base64,mimetypes,sys,dateutil.parser,datetime,hashlib,glob,getpass
 from xml.etree import ElementTree as ET
 from html2text import html2text
+from unidecode import unidecode
 
-def main(glob_path="~/Dropbox/Docs/Evernote.Export/*.enex"):
+def main(glob_path="~/Dropbox/Docs/Evernote/*.enex"):
     glob_path = os.path.expanduser(glob_path)
     credentials = {}
     credentials['username'] = raw_input("Input username: ")
@@ -15,7 +16,7 @@ def main(glob_path="~/Dropbox/Docs/Evernote.Export/*.enex"):
     #We want to assign a unique id to each note, so we can link them
     note_dict = dict((note.find('title').text,hashlib.md5(note.find('title').text).hexdigest()) for path in glob.glob(glob_path) for note in ET.parse(path).iter('note'))
     for path in glob.glob(glob_path):
-        if path!='/home/billbrod/Dropbox/Docs/Evernote.Export/test.enex':
+        if path=='/home/billbrod/Dropbox/Docs/Evernote/test.enex':
             continue
         print("Parsing %s"%path)
         tree = ET.parse(path)
@@ -30,14 +31,13 @@ def process_note(note):
     created = dateutil.parser.parse(created).strftime("<%Y-%m-%d %a>")
     # The content requires some work
     content = note.find("content").text
-    content = re.sub(u'u\xa0','',content)
     content = html2text(content)
-    content = re.sub(u'\u2019', '\'', content)
-    content = re.sub(u'\u2018', '\'', content)
-    content = re.sub(u'\u2014', '----', content)
-    content = re.sub(u'\u201c', '\"', content)
-    content = re.sub(u'\u201d', '\"', content)
     content = re.sub('\\\\', '', content)
+    #This replaces unicode characters with the "best guess" in
+    #ascii. Since we don't have any accented or non-English
+    #characters, I'm pretty sure all the unicode is just punctuation,
+    #which this should take care of without any issues.
+    content = unidecode(content)
     rsrc = []
     for r in note.findall("resource"):
         data = r.find("data")
@@ -46,8 +46,12 @@ def process_note(note):
 	    enc  = data.get("encoding")
 	    assert enc == "base64", "Unsupported encoding: {0}".format(enc)
 	    data = base64.decodestring(data.text)
-	    # We take the last extension (it's the most complete)
-	    ext  = mimetypes.guess_all_extensions(mime.text)[-1]
+            # To get the extension, we grab the end of the the filename from the resource attributes            
+            try:
+                ext = os.path.splitext(r.find('resource-attributes').find('file-name').text)[-1]
+            #If it doesn't have resource-attributes, we hope mimetypes does the job
+            except AttributeError:
+                ext  = mimetypes.guess_all_extensions(mime.text)[-1]
 	    rsrc.append(dict(
 		data = data,
 		mime = mime,
@@ -64,7 +68,6 @@ def process_note(note):
 def write_note(note,attach_count,note_dict,credentials,path="notes"):
     """Now need to decide how to format my Evernote text into something org-modey.
     
-    TODO:
     - Deal with regular text (I had a tendency to indent lines
     when I wanted things to be coherent, instead make that part of one
     paragraph, making a new paragraph if there's a newline without
@@ -83,7 +86,13 @@ def write_note(note,attach_count,note_dict,credentials,path="notes"):
     being removed from the middle of paragraphs, so check why that is
     -- fixed the \n's, but I think tables may be too difficult. Since
     they're infrequent, probably best to go through and fix them by
-    hand, they're not too far off..
+    hand, they're not too far off. The real issue is that it's not
+    really clear where I would want a table to start (i.e., what
+    should be the first column of a table header and what's the text
+    beforehand), which makes it impossible to parse them. When they
+    get converted, they're missing the | that starts the table (and
+    the one at the end of each row) and I can't come up with a good
+    way to determine where to put it.
 
     """
     with open(path,'a') as f:
@@ -91,15 +100,15 @@ def write_note(note,attach_count,note_dict,credentials,path="notes"):
         f.write("* %s\n"%note['title'])
         f.write("  %s\n"%note['created'])
         f.write("  :PROPERTIES:\n  :ID: %s\n  :END:\n\n"%note_dict[note['title']])
-        f.write("%s"%format_content(note['content'],note_dict,credentials))
+        f.write("%s\n"%format_content(note['content'],note_dict,credentials))
         if note['resources']:
-            attach_path = os.path.dirname(path)+'/attachments/%s-%s%s'%(os.path.basename(path.split('.')[0]),'%s','%s')
+            attach_path = os.path.dirname(path)+'.Attachments/%s-%s%s'%(os.path.basename(os.path.splitext(path)[0]),'%s','%s')
             if not os.path.isdir(os.path.dirname(attach_path)):
                 os.makedirs(os.path.dirname(attach_path))
             for resource in note['resources']:
                 with open(attach_path%(attach_count,resource['ext']),'wb') as g:
                     g.write(resource['data'])
-                f.write(" [[file:%s][Attachment %s]]\n"%(attach_path%(attach_count,resource['ext']),attach_count))
+                f.write("  [[file:%s][Attachment %s]]\n"%(attach_path%(attach_count,resource['ext']),attach_count))
                 attach_count+=1
         f.write("\n\n")
         
@@ -121,7 +130,10 @@ def format_content(content,note_dict,credentials):
     #First we find all urls that have evernote in them
     for url in re.findall("(?P<url>https?://www.evernote[^\s\]]+)", content):
         #Then we use evernote_get_title to find the title of the note and find its unique id in note_dict
-        content = re.subn(url,"id:%s"%note_dict[evernote_get_title(url,credentials)],content)[0]
+        try:
+            content = re.subn(url,"id:%s"%note_dict[evernote_get_title(url,credentials)],content)[0]
+        except:
+            content = re.subn(url,"dead link",content)[0]
     return content
 
 def evernote_get_title(url,credentials):
